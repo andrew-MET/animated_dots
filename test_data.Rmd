@@ -1,0 +1,83 @@
+---
+title: "Getting data""
+output: html_notebook
+---
+
+The idea is to build an animated time series of an ensmeble forecast using each member. Each member will be represented by
+a dot and have a trajectory from time zero until the the time of interest. At the time of interest the dots are binned resuling 
+in a "dots" plot as in the ggdist package. 
+
+Let's start by getting some MEPS data that is quite uncertain - we could do that by taking 2m temperature from the most
+recent MEPS forecast and computing the standard deviation at each lead time. 
+
+```{r setup}
+library(here)
+library(harp)
+library(dplyr)
+library(purrr)
+library(tidyr)
+knitr::opts_chunk$set(message = FALSE, warning = FALSE)
+```
+
+```{r get-intial-data}
+t2m <- map(
+  0:48,
+  ~read_forecast(
+    2020090800,
+    2020090800,
+    "meps",
+    "T2m",
+    lead_time        = .x,
+    file_path        = here("data"),
+    file_template    = "{fcst_model}/{YYYY}/{MM}/{DD}/meps_lagged_6_h_subset_2_5km_{YYYY}{MM}{DD}T{HH}Z.nc",
+    file_format_opts = netcdf_opts(options_set = "met_norway_eps"), 
+    return_data      = TRUE
+  ) %>% 
+    ens_stats(min = TRUE, max = TRUE) %>% 
+    select(-contains("meps_mbr"))
+)
+
+t2m <- structure(
+  set_names(list(bind_rows(map(t2m, 1))), "meps"),
+  class = "harp_fcst"
+)
+```
+
+It looks like there is some scope for some nice spread in the ensemble
+```{r field-plot, message=FALSE, fig.align='center', warning=FALSE}
+plot_field(t2m, "meps", ens_spread, lead_time = 42)
+```
+
+We can probably just get the data and interpolate to all stations and see what we get.
+```{r interp-to-stations}
+read_forecast(
+  2020090800,
+  2020090800,
+  "MEPS_op",
+  "T2m",
+  lead_time        = seq(0, 48),
+  file_path        = here("data/meps"),
+  file_template    = "{YYYY}/{MM}/{DD}/meps_lagged_6_h_subset_2_5km_{YYYY}{MM}{DD}T{HH}Z.nc",
+  file_format_opts = netcdf_opts(options_set = "met_norway_eps"), 
+  transformation   = "interpolate",
+  output_file_opts = sqlite_opts(path = here("data", "FCTABLE")),
+  return_data      = TRUE, 
+  show_progress    = TRUE 
+)
+
+read_forecast(
+  2020090800,
+  2020090800,
+  "MEPS_op",
+  "Pcp",
+  lead_time        = seq(0, 48),
+  file_path        = here("data/meps"),
+  file_template    = "{YYYY}/{MM}/{DD}/meps_lagged_6_h_subset_2_5km_{YYYY}{MM}{DD}T{HH}Z.nc",
+  file_format_opts = modify_at(netcdf_opts(options_set = "met_norway_eps"), "z_var", ~"height0"), 
+  transformation   = "interpolate",
+  output_file_opts = sqlite_opts(path = here("data", "FCTABLE")),
+  return_data      = TRUE, 
+  show_progress    = TRUE 
+)
+```
+

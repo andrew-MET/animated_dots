@@ -1,0 +1,83 @@
+---
+title: "Initial plots"
+output: html_notebook
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+```
+
+We now have data for T2m and precipitation interpolated to stations. Let's do some plots!
+
+```{r attach-libs}
+library(harp)
+library(here)
+library(dplyr)
+library(purrr)
+library(ggdist)
+```
+
+```{r}
+t2m <- read_point_forecast(
+  2020090800, 
+  2020090800,
+  "MEPS_op",
+  "eps",
+  "T2m",
+  lead_time = seq(0, 48),
+  file_path = here("data", "FCTABLE")
+) %>% 
+  scale_point_forecast(-273.15, "degC", FALSE)
+
+pcp1h <- read_point_forecast(
+  2020090800, 
+  2020090800,
+  "MEPS_op",
+  "eps",
+  "AccPcp1h",
+  lead_time = seq(0, 48),
+  file_path = here("data", "FCTABLE")
+)
+```
+
+The stations I want to test for temperature are Oslo, Helsinki and De Bilt, so let's find the SIDs
+```{r}
+filter(station_list, grepl("bilt|oslo|helsinki", tolower(name)))
+```
+
+So let's go with 1492, 2795 and 6260. We won't use the harp station eps plotting as it's not perfect - instead we'll use ggdist
+```{r station-plots, fig.align='center'}
+plot_data <- gather_members(filter(t2m$MEPS_op, SID %in% c(1492, 2795, 6260))) %>% 
+  inner_join(station_list)
+ggplot(plot_data, aes(x = leadtime, y = forecast)) + 
+  stat_lineribbon(size = 0.3, colour = "grey20") + 
+  facet_wrap(vars(name), ncol = 1, scales = "free_y") +
+  scale_fill_brewer() +
+  scale_x_continuous("Lead Time [h]", breaks = seq(0, 48, 3)) +
+  labs(y = bquote("Temperature ["*degree*"C]")) +
+  theme_bw()
+```
+
+Now we want to create an animation of the data - each ensemble member one hour behind the preceding one. We therefore need to create a data frame for each hour so that we have the number of hours (49) plus the number of ensemble members (30). This means that the "lead time" will be frame number - member, where the frames are counted from 0. Then we only want the rows where member + leadtime = frame number?
+
+```{r make-frames}
+frame_func <- function(frame_number, df) {
+  mutate(df, 
+    lead_time = frame_number - as.numeric(gsub("[[:alpha:]]", "", member)),
+    frame     = frame_number
+  ) %>% 
+    filter(as.numeric(gsub("[[:alpha:]]", "", member)) + leadtime == frame_number)
+}
+
+anim_df <- map_dfr(0:78, frame_func, filter(plot_data, grepl("helsinki", tolower(name))))
+```
+
+Check that it looks correct with faceted plot showing each frame. 
+```{r plot-frames, fig.align='center', fig.height=9, fig.width=9}
+ggplot(anim_df, aes(lead_time, forecast, colour = member)) + 
+  geom_point() + 
+  coord_cartesian(xlim = c(0, 48), expand = FALSE) + 
+  facet_wrap(vars(frame)) + 
+  theme(legend.position = "none")
+```
+
